@@ -1,0 +1,170 @@
+REPORT Z_BDC_TABLE_CONTROL18.
+
+TYPES: BEGIN OF TY_LINE,
+         WERKS         TYPE WERKS_D,  "PLANT
+         KSCHL         TYPE KSCHA, "CONDITION TYPE
+         MATNR         TYPE MATNR,  "MATERIAL NUMBER
+         KONWA(5),"         TYPE KONWA,  "CURRENCY
+         KBETR(16),"         TYPE KBETR, "PRICE
+         VALID_FRM(10),    "FROM DATE
+         VALID_TO(10),
+       END OF TY_LINE.
+
+DATA : IT TYPE TABLE OF TY_LINE,
+       WA TYPE TY_LINE.
+
+DATA : WA_CTU TYPE CTU_PARAMS. " THIS IS FOR DEFAULT SCREEN SIZE FOR ALL THE PC
+
+DATA IT_RAW TYPE TRUXS_T_TEXT_DATA.
+
+DATA: N1         TYPE I, CH(2) TYPE N,
+      D(2), M(2), Y(4), DATE LIKE SY-DATUM, F_DATE(10).
+
+DATA: IT_BDC TYPE TABLE OF BDCDATA,
+      WA_BDC TYPE BDCDATA.
+
+PARAMETERS P_FILE TYPE RLGRAP-FILENAME OBLIGATORY.
+
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR P_FILE.
+  PERFORM FETCH_FILE.
+
+START-OF-SELECTION.
+  PERFORM GET_FILE.
+  PERFORM FILL_DB.
+
+
+FORM GET_FILE .
+  CALL FUNCTION 'TEXT_CONVERT_XLS_TO_SAP'
+    EXPORTING
+*     I_FIELD_SEPERATOR    =
+      I_LINE_HEADER        = 'X'
+      I_TAB_RAW_DATA       = IT_RAW
+      I_FILENAME           = P_FILE
+    TABLES
+      I_TAB_CONVERTED_DATA = IT
+    EXCEPTIONS
+      CONVERSION_FAILED    = 1
+      OTHERS               = 2.
+  IF SY-SUBRC <> 0.
+* Implement suitable error handling here
+  ENDIF.
+
+ENDFORM.
+
+FORM FETCH_FILE .
+  CALL FUNCTION 'F4_FILENAME'
+    IMPORTING
+      FILE_NAME = P_FILE.
+
+ENDFORM.
+
+FORM FILL_DB .
+  WA_CTU-DISMODE = 'E'. " MODE: ERROR SCREEN
+  WA_CTU-UPDMODE = 'A'. "update mode:Asynchronous
+  WA_CTU-DEFSIZE = 'X'.
+
+  READ TABLE IT INTO WA INDEX 1.
+  IF SY-SUBRC = 0.
+    PERFORM BDC_DYNPRO      USING 'SAPMV13A' '0100'.
+    PERFORM BDC_FIELD       USING 'BDC_CURSOR'
+                                  'RV13A-KSCHL'.
+    PERFORM BDC_FIELD       USING 'BDC_OKCODE'
+                                  '/00'.
+    PERFORM BDC_FIELD       USING 'RV13A-KSCHL'
+                                 WA-KSCHL." 'PR00'.
+    PERFORM BDC_DYNPRO      USING 'SAPLV14A' '0100'.
+    PERFORM BDC_FIELD       USING 'BDC_CURSOR'
+                                  'RV130-SELKZ(03)'.
+    PERFORM BDC_FIELD       USING 'BDC_OKCODE'
+                                  '=WEIT'.
+    PERFORM BDC_FIELD       USING 'RV130-SELKZ(01)'
+                                  ''.
+    PERFORM BDC_FIELD       USING 'RV130-SELKZ(03)'
+                                  'X'.
+    PERFORM BDC_DYNPRO      USING 'SAPMV13A' '1406'.
+    PERFORM BDC_FIELD       USING 'BDC_CURSOR'
+                                  'RV13A-DATBI(01)'.
+    PERFORM BDC_FIELD       USING 'BDC_OKCODE'
+                                  '/00'.
+    PERFORM BDC_FIELD       USING 'KOMG-WERKS'
+                                 WA-WERKS.                  " '1000'.
+
+    LOOP AT IT INTO WA .
+
+      IF N1 LT 15.
+        N1 = N1 + 1.
+
+      ELSE.
+        N1 = 2.
+        PERFORM BDC_FIELD       USING 'BDC_OKCODE'
+                                       '=P+'.
+        PERFORM BDC_DYNPRO      USING 'SAPMV13A' '1406'.
+        PERFORM BDC_FIELD       USING 'BDC_CURSOR'
+                                      'KOMG-MATNR(01)'.
+      ENDIF.
+      CH = N1.
+      PERFORM BDC_FIELD1       USING 'KOMG-MATNR'
+                                    WA-MATNR CH."'38'.
+
+      PERFORM BDC_FIELD1       USING 'KONP-KBETR'
+                                    WA-KBETR CH."'            1000'.
+      PERFORM BDC_FIELD1      USING 'KONP-KONWA'
+                                    WA-KONWA CH."'EUR'.
+
+      D = WA-VALID_FRM+0(2).
+      M = WA-VALID_FRM+3(2).
+      Y = WA-VALID_FRM+6(4).
+      CONCATENATE Y M D INTO DATE.
+      WRITE DATE TO F_DATE.
+
+      PERFORM BDC_FIELD1      USING 'RV13A-DATAB'
+                                   F_DATE CH." '25.08.2025'.
+
+      D = WA-VALID_TO+0(2).
+      M = WA-VALID_TO+3(2).
+      Y = WA-VALID_TO+6(4).
+      CONCATENATE Y M D INTO DATE.
+      WRITE DATE TO F_DATE.
+
+      PERFORM BDC_FIELD1       USING 'RV13A-DATBI'
+                                  F_DATE CH."  '29.08.2026'.
+    ENDLOOP.
+
+    PERFORM BDC_DYNPRO      USING 'SAPMV13A' '1406'.
+    PERFORM BDC_FIELD       USING 'BDC_CURSOR'
+                                  'KOMG-MATNR(01)'.
+    PERFORM BDC_FIELD       USING 'BDC_OKCODE'
+                                  '=SICH'.
+    CALL TRANSACTION 'VK11' USING IT_BDC OPTIONS FROM WA_CTU.
+
+    IF SY-SUBRC = 0.
+      MESSAGE 'FILE SUCCES' TYPE 'I'.
+    ELSE.
+      MESSAGE 'FILE FAILED' TYPE 'E'.
+    ENDIF.
+  ENDIF.
+ENDFORM.
+
+FORM BDC_DYNPRO  USING  PROG SCRNO .
+  CLEAR WA_BDC.
+  WA_BDC-PROGRAM =  PROG.
+  WA_BDC-DYNPRO = SCRNO.
+  WA_BDC-DYNBEGIN = 'X'.
+  APPEND WA_BDC TO IT_BDC.
+ENDFORM.
+
+FORM BDC_FIELD  USING  FNAME FVALUE.
+  CLEAR WA_BDC.
+  WA_BDC-FNAM = FNAME.
+  WA_BDC-FVAL = FVALUE.
+  APPEND WA_BDC TO IT_BDC.
+ENDFORM.
+
+FORM BDC_FIELD1  USING  FNAME FVALUE CH.
+  CLEAR WA_BDC.
+  CONCATENATE FNAME '(' CH ')' INTO WA_BDC-FNAM.
+  CONDENSE WA_BDC-FNAM NO-GAPS.
+  WA_BDC-FVAL = FVALUE.
+  APPEND WA_BDC TO IT_BDC.
+
+ENDFORM.
